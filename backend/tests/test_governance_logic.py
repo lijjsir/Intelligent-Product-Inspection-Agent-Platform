@@ -350,7 +350,7 @@ async def test_health_checker_requires_model_key_in_models_list(monkeypatch):
     )
 
     assert checked[0]["health_status"] == "unhealthy"
-    assert checked[0]["health_message"] == "GET /models missing model_key: chat-1"
+    assert checked[0]["health_message"] == "GET /models missing model_key: chat-1; available: [other-model]"
 
 
 @pytest.mark.asyncio

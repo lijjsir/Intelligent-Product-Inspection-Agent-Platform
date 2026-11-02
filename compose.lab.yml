@@ -99,6 +99,8 @@ services:
       PIAP_GOVERNANCE_SECRET: ${PIAP_GOVERNANCE_SECRET}
       PIAP_LANGFUSE_ENABLED: "false"
       PIAP_TRUST_SCORING_ENABLED: "false"
+    extra_hosts: &app_extra_hosts
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./deploy/lab/secrets:/run/secrets:ro
       - uploads_data:/app/backend/runtime_uploads
@@ -130,6 +132,7 @@ services:
     command: python -m celery -A worker.celery_app.celery_app worker -l info --concurrency=4
     env_file: .env.lab
     environment: *app_environment
+    extra_hosts: *app_extra_hosts
     volumes:
       - ./deploy/lab/secrets:/run/secrets:ro
       - uploads_data:/app/backend/runtime_uploads
@@ -147,6 +150,7 @@ services:
     command: python -m celery -A worker.celery_app.celery_app beat -l info
     env_file: .env.lab
     environment: *app_environment
+    extra_hosts: *app_extra_hosts
     volumes:
       - ./deploy/lab/secrets:/run/secrets:ro
     depends_on:

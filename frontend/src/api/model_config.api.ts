@@ -1,5 +1,6 @@
 import { http } from "./http";
 import type { HealthCheckAllResult, HealthCheckResult, ModelConfig, ModelConfigPayload } from "@/types/governance.types";
+import type { ModelCapability, ModelVerificationResult } from "@/types/governance.types";
 
 export const modelConfigApi = {
   list() {
@@ -15,10 +16,13 @@ export const modelConfigApi = {
     return http.delete<boolean>(`/v1/model-configs/${id}`);
   },
   checkHealth(id: string) {
-    return http.post<HealthCheckResult>(`/v1/model-configs/${id}/health-check`);
+    return http.post<HealthCheckResult>(`/v1/model-configs/${id}/health-check`, undefined, { timeout: 150000 });
   },
   checkHealthAll() {
-    return http.post<HealthCheckAllResult>("/v1/model-configs/health-check-all");
+    return http.post<HealthCheckAllResult>("/v1/model-configs/health-check-all", undefined, { timeout: 600000 });
+  },
+  verify(id: string, capabilities: ModelCapability[]) {
+    return http.post<ModelVerificationResult>(`/v1/model-configs/${id}/verify`, { capabilities }, { timeout: 660000 });
   },
 };
 

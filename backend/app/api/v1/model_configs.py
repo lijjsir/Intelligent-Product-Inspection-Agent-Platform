@@ -1,11 +1,15 @@
 from fastapi import APIRouter, Depends
 
 from agent.llm.health_checker import ModelHealthChecker
+from agent.llm.runtime_probe import ModelRuntimeProbe
 from app.api.v1.deps import get_current_user, get_db
 from app.core.permissions import require_role
+from app.core.model_types import normalize_model_type
+from app.core.exceptions import ValidationError
 from app.repositories.model_config_repo import ModelConfigRepository
 from app.schemas.common import ResponseEnvelope
 from app.schemas.governance import HealthCheckAllResult, HealthCheckResult, ModelConfigCreate, ModelConfigResponse, ModelConfigUpdate
+from app.schemas.governance import ModelVerificationRequest, ModelVerificationResult
 from app.schemas.user import CurrentUser
 from app.services.model_config_service import ModelConfigService
 
@@ -23,7 +27,7 @@ def _to_response(model) -> ModelConfigResponse:
         source_type=getattr(model, "source_type", "external"),
         source_uri=getattr(model, "source_uri", ""),
         endpoint=model.endpoint,
-        model_type=model.model_type,
+        model_type=normalize_model_type(model.model_type),
         fine_tune_command_template=getattr(model, "fine_tune_command_template", None),
         offline_eval_command_template=getattr(model, "offline_eval_command_template", None),
         deployment_command_template=getattr(model, "deployment_command_template", None),
@@ -140,3 +144,21 @@ async def check_single_model_health(
     await db.commit()
     ModelConfigService.invalidate_runtime_cache(current.org_id)
     return ResponseEnvelope(data=HealthCheckResult(health_status=status, health_message=message))
+
+
+@router.post("/{config_id}/verify", response_model=ResponseEnvelope[ModelVerificationResult])
+async def verify_local_model(
+    config_id: str,
+    payload: ModelVerificationRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    require_role("model_config", current.role)
+    model = await ModelConfigService(db, current.org_id).get_config(config_id)
+    runtime = ModelConfigService.to_runtime_payload(model)
+    if str(runtime.get("provider") or "").strip().lower() != "local_openai":
+        raise ValidationError("接入验证适用于 local_openai 本地模型")
+    results = await ModelRuntimeProbe().verify(runtime, payload.capabilities)
+    return ResponseEnvelope(data=ModelVerificationResult(
+        model_config_id=config_id, model_key=model.model_key, results=results,
+    ))

@@ -63,6 +63,22 @@ export interface HealthCheckAllResult {
   unhealthy: number;
 }
 
+export type ModelCapability = "text" | "json" | "vision" | "tools" | "embedding";
+
+export interface ModelCapabilityResult {
+  capability: ModelCapability;
+  status: "healthy" | "unhealthy" | "degraded" | "unsupported";
+  message: string;
+  latency_ms: number;
+  vector_dimension?: number | null;
+}
+
+export interface ModelVerificationResult {
+  model_config_id: string;
+  model_key: string;
+  results: ModelCapabilityResult[];
+}
+
 export interface BillingBucket {
   bucket: string;
   total_tokens: number;

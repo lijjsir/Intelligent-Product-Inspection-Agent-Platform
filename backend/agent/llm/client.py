@@ -14,6 +14,8 @@ except Exception:  # pragma: no cover - optional dependency at runtime
 from agent.llm.base_url_resolver import default_local_openai_base_url, resolve_runtime_base_url
 from agent.llm.langfuse_tracer import LangfuseTracer
 from agent.llm.pricing import ModelPricing
+from agent.llm.runtime_auth import runtime_headers
+from agent.llm.runtime_options import apply_runtime_options
 from app.core.config import settings
 
 
@@ -32,7 +34,7 @@ class LLMClient:
         input_price_per_million: float | None = None,
         output_price_per_million: float | None = None,
     ) -> None:
-        self._provider = provider or "volcengine"
+        self._provider = str(provider or "volcengine").strip().lower()
         if self._provider == "local_openai":
             self._api_key = api_key
             self._base_url = resolve_runtime_base_url(self._provider, base_url)
@@ -416,10 +418,8 @@ class LLMClient:
         observation_metadata: dict[str, Any] | None = None,
         parse_choices_content: bool = True,
     ) -> dict[str, Any]:
-        if not self._api_key and self._provider != "local_openai":
-            raise RuntimeError(f"api key is not configured for provider '{self._provider}' in model config page")
-
-        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+        headers = runtime_headers(self._provider, self._api_key)
+        payload = apply_runtime_options(payload, self._provider)
         model_name = str(payload.get("model") or self._model_id)
         model_parameters = {
             key: value
@@ -435,7 +435,8 @@ class LLMClient:
             model_parameters=model_parameters or None,
             metadata=self._build_observation_metadata(path=path, extra=observation_metadata),
         ) as observation:
-            async with httpx.AsyncClient(base_url=self._base_url, timeout=600.0, trust_env=False) as client:
+            timeout = float(settings.local_model_timeout_sec) if self._provider == "local_openai" else 600.0
+            async with httpx.AsyncClient(base_url=self._base_url, timeout=timeout, trust_env=False) as client:
                 last_error: Exception | None = None
                 request_payload = dict(payload)
                 response_format_fallback = False

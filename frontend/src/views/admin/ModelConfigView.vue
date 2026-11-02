@@ -5,7 +5,9 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import AlgoWorkspaceHero from "@/components/business/algo/AlgoWorkspaceHero.vue";
 import { useModelConfigStore } from "@/stores/model_config.store";
 import { useAuthStore } from "@/stores/auth.store";
+import { modelConfigApi } from "@/api/model_config.api";
 import type { ModelConfigPayload, ModelType } from "@/types/governance.types";
+import type { ModelCapability, ModelCapabilityResult, ModelConfig } from "@/types/governance.types";
 
 const store = useModelConfigStore();
 const auth = useAuthStore();
@@ -15,6 +17,21 @@ const editingId = ref("");
 const checkingId = ref("");
 const checkingAll = ref(false);
 const editingHasApiKey = ref(false);
+const isLocalProvider = computed(() => form.provider.trim().toLowerCase() === "local_openai");
+const verificationOpen = ref(false);
+const verificationModel = ref<ModelConfig | null>(null);
+const verifying = ref(false);
+const verificationResults = ref<ModelCapabilityResult[]>([]);
+const selectedCapabilities = ref<ModelCapability[]>([]);
+const capabilityOptions: { value: ModelCapability; label: string }[] = [
+  { value: "text", label: "文字生成" }, { value: "json", label: "JSON 输出" },
+  { value: "vision", label: "图片理解" }, { value: "tools", label: "工具调用" },
+  { value: "embedding", label: "向量生成" },
+];
+const providerOptions = [
+  { value: "local_openai", label: "本地 OpenAI 兼容服务（Ollama / vLLM）" },
+  { value: "volcengine", label: "火山引擎" }, { value: "deepseek", label: "DeepSeek" },
+];
 const form = reactive({
   provider: "volcengine",
   model_key: "",
@@ -39,9 +56,9 @@ const form = reactive({
 });
 
 const modelTypeOptions = [
-  { label: "chat", value: "chat" },
-  { label: "embedding", value: "embedding" },
-  { label: "multimodal", value: "multimodal" },
+  { label: "文字对话", value: "chat" },
+  { label: "向量生成", value: "embedding" },
+  { label: "多模态（文字与图片）", value: "multimodal" },
 ];
 
 const sourceTypeOptions = [
@@ -111,11 +128,42 @@ function openEdit(row: any) {
 
 const isEditing = computed(() => Boolean(editingId.value));
 const apiKeyHint = computed(() => {
+  if (isLocalProvider.value) return "本地服务未启用鉴权时可留空；启用鉴权时填写该服务的 Key。编辑时留空保留已有 Key。";
   if (!isEditing.value) return "创建后不会回显明文 API Key，请妥善保管。";
   return editingHasApiKey.value
     ? "已配置 API Key；留空表示保持不变，输入新值表示覆盖。"
     : "尚未配置 API Key；留空表示不设置。";
 });
+
+function openVerification(row: ModelConfig) {
+  verificationModel.value = row;
+  verificationResults.value = [];
+  selectedCapabilities.value = row.model_type === "embedding" ? ["embedding"]
+    : row.model_type === "multimodal" ? ["text", "json", "vision", "tools"] : ["text", "json", "tools"];
+  verificationOpen.value = true;
+}
+
+async function verifyModel() {
+  if (!verificationModel.value || !selectedCapabilities.value.length || verifying.value) return;
+  verifying.value = true;
+  verificationResults.value = [];
+  try {
+    const { data } = await modelConfigApi.verify(verificationModel.value.id, selectedCapabilities.value);
+    verificationResults.value = data.data.results;
+  } catch (e: any) {
+    ElMessage.error(e?.message || "接入验证失败");
+  } finally {
+    verifying.value = false;
+  }
+}
+
+function capabilityLabel(value: string) {
+  return capabilityOptions.find((item) => item.value === value)?.label || value;
+}
+
+function verificationStatus(value: string) {
+  return ({ healthy: "通过", unhealthy: "未通过", degraded: "暂不可用", unsupported: "接口未接受" } as Record<string, string>)[value] || value;
+}
 
 async function submit() {
   let runtimeEnvJson: Record<string, unknown> | null = null;
@@ -239,7 +287,7 @@ onMounted(() => {
 
 <template>
   <div class="flex flex-col gap-5">
-    <AlgoWorkspaceHero title="Base Model 注册" description="维护可用于 LoRA 微调的基础模型来源、命令模板与健康状态。">
+    <AlgoWorkspaceHero title="Base Model 注册" description="管理本地或外部模型接口、验证调用能力，并配置训练与部署模板。">
       <template #actions>
         <div class="flex gap-3">
           <el-button v-if="canManage" @click="checkAll" :loading="checkingAll">全部检测</el-button>
@@ -284,9 +332,10 @@ onMounted(() => {
             <el-tag :type="row.is_active ? 'success' : 'info'">{{ row.is_active ? "是" : "否" }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="290" fixed="right">
           <template #default="{ row }">
             <el-button v-if="canManage" link type="primary" @click="checkOne(row.id)" :loading="checkingId === row.id">检测</el-button>
+            <el-button v-if="canManage && row.provider.trim().toLowerCase() === 'local_openai'" link type="primary" @click="openVerification(row)" :disabled="verifying">接入验证</el-button>
             <el-button v-if="canManage" link type="primary" @click="openEdit(row)">编辑</el-button>
             <el-button v-if="canManage" link type="danger" @click="remove(row.id)">删除</el-button>
             <span v-if="!canManage" class="text-xs text-zinc-400">仅可查看</span>
@@ -298,11 +347,13 @@ onMounted(() => {
     <el-drawer v-model="drawerOpen" :title="editingId ? '编辑 Base Model' : '新增 Base Model'" size="500px">
       <el-form label-position="top">
         <el-form-item label="提供方">
-          <el-input v-model="form.provider" />
+          <el-select v-model="form.provider" filterable allow-create default-first-option placeholder="选择或输入提供方">
+            <el-option v-for="item in providerOptions" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
         </el-form-item>
         <el-form-item label="模型标识">
           <el-input v-model="form.model_key" :disabled="isEditing" />
-          <div v-if="isEditing" class="field-hint">编辑时不支持修改提供方或模型标识；如需变更请新建模型配置。</div>
+          <div v-if="isEditing" class="field-hint">模型标识不可修改；提供方可以修正。如需变更模型标识，请新建配置。</div>
         </el-form-item>
         <el-form-item label="展示名称"><el-input v-model="form.display_name" /></el-form-item>
         <el-form-item label="来源类型">
@@ -313,7 +364,10 @@ onMounted(() => {
         <el-form-item label="来源地址">
           <el-input v-model="form.source_uri" placeholder="HuggingFace/ModelScope ID 或本地路径" />
         </el-form-item>
-        <el-form-item label="接口地址"><el-input v-model="form.endpoint" /></el-form-item>
+        <el-form-item label="接口地址">
+          <el-input v-model="form.endpoint" :placeholder="isLocalProvider ? 'http://host.docker.internal:11434/v1' : 'https://服务地址/v1'" />
+          <div v-if="isLocalProvider" class="field-hint">填写 OpenAI 兼容接口的基础地址，以 /v1 结尾。服务在同一宿主机时可使用上面的地址；服务在其他机器时填写其 IP。模型标识需与服务实际提供的名称一致。</div>
+        </el-form-item>
         <el-form-item label="API Key">
           <el-input v-model="form.api_key" type="password" show-password />
           <div class="field-hint">{{ apiKeyHint }}</div>
@@ -354,6 +408,24 @@ onMounted(() => {
         <el-button type="primary" @click="submit">保存</el-button>
       </template>
     </el-drawer>
+
+    <el-dialog v-model="verificationOpen" title="本地模型接入验证" width="min(760px, 95vw)" :close-on-click-modal="!verifying" :close-on-press-escape="!verifying" :show-close="!verifying">
+      <p class="mb-3">{{ verificationModel?.display_name }} · {{ verificationModel?.model_key }}</p>
+      <p class="field-hint mb-3">发送少量测试文字和内置测试图片，检查接口及返回格式；不会执行业务工具或修改向量索引。验证结果不代表业务准确率。首次加载模型可能需要较长时间。</p>
+      <el-checkbox-group v-model="selectedCapabilities" :disabled="verifying">
+        <el-checkbox v-for="item in capabilityOptions" :key="item.value" :value="item.value">{{ item.label }}</el-checkbox>
+      </el-checkbox-group>
+      <el-table :data="verificationResults" class="mt-4" v-loading="verifying" element-loading-text="正在调用模型，请等待验证完成">
+        <el-table-column label="能力" width="100"><template #default="{ row }">{{ capabilityLabel(row.capability) }}</template></el-table-column>
+        <el-table-column label="结果" width="110"><template #default="{ row }"><el-tag :type="row.status === 'healthy' ? 'success' : row.status === 'unhealthy' ? 'danger' : 'warning'">{{ verificationStatus(row.status) }}</el-tag></template></el-table-column>
+        <el-table-column prop="message" label="详情" min-width="240" />
+        <el-table-column label="耗时" width="90"><template #default="{ row }">{{ row.latency_ms }} ms</template></el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button :disabled="verifying" @click="verificationOpen = false">关闭</el-button>
+        <el-button type="primary" :loading="verifying" :disabled="!selectedCapabilities.length" @click="verifyModel">开始验证</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 

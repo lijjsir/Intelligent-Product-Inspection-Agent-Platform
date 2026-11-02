@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     agent_quality_task_timeout_ms: int = 1200000
     rate_limit_rpm_default: int = 60
     model_health_timeout_sec: int = 5
+    local_model_timeout_sec: int = 120
+    local_model_reasoning_effort: str = ""
+    local_model_max_tokens: int = 2048
     mcp_default_transport: str = "streamable_http"
     mcp_timeout_seconds: int = 30
     mcp_retries: int = 1

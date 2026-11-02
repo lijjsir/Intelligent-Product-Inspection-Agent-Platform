@@ -89,6 +89,12 @@ async def test_health_checker_remaps_local_openai_loopback_endpoint_inside_conta
         async def get(self, path, headers=None):
             return FakeResponse()
 
+        async def post(self, path, json=None, headers=None):
+            assert path == "/chat/completions"
+            assert json["model"] == "qwen2.5:7b-instruct"
+            import httpx
+            return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
     monkeypatch.setattr("agent.llm.health_checker.httpx.AsyncClient", FakeClient)
     monkeypatch.setattr("agent.llm.base_url_resolver.os.path.exists", lambda path: path == "/.dockerenv")
     monkeypatch.setattr(

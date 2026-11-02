@@ -52,6 +52,7 @@ SOURCE_FILES = {
     "deploy/lab/nginx.conf",
     "deploy/lab/init-secrets.sh",
     "deploy/lab/install-docker-ubuntu.sh",
+    "deploy/lab/install-ollama-user.py",
     "deploy/lab/README.md",
 }
 DENIED_PARTS = {

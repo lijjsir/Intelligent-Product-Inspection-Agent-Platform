@@ -7,6 +7,9 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.llm.gateway import LLMGateway
+from agent.llm.base_url_resolver import resolve_runtime_base_url
+from agent.llm.runtime_auth import runtime_headers
+from agent.llm.runtime_options import apply_runtime_options
 from app.core.config import settings
 from app.core.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
 from app.repositories.meeting_repo import MeetingRepository
@@ -318,27 +321,28 @@ class MeetingAiService:
         max_tokens: int,
     ) -> str:
         api_key = str(runtime.get("api_key") or "").strip()
-        base_url = str(runtime.get("base_url") or "").strip().rstrip("/")
+        provider = str(runtime.get("provider") or "deepseek").strip().lower()
+        base_url = resolve_runtime_base_url(provider, runtime.get("base_url"))
         model = str(runtime.get("model_id") or "").strip()
 
-        if not api_key:
-            raise ServiceUnavailableError("会议 AI 未配置可用模型。")
+        try:
+            headers = runtime_headers(provider, api_key)
+        except RuntimeError as exc:
+            raise ServiceUnavailableError("会议 AI 未配置可用模型的 API Key。") from exc
         if not base_url or not model:
             raise ServiceUnavailableError("会议 AI 模型配置不完整，请检查 endpoint 和模型标识。")
 
-        async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
+        timeout = settings.local_model_timeout_sec if provider == "local_openai" else 60
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             resp = await client.post(
                 f"{base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
+                headers=headers,
+                json=apply_runtime_options({
                     "model": model,
                     "messages": messages,
                     "temperature": temperature,
                     "max_tokens": max_tokens,
-                },
+                }, provider),
             )
             resp.raise_for_status()
             data = resp.json()

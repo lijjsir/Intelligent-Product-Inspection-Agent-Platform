@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from app.core.config import settings
 
@@ -19,7 +19,11 @@ def resolve_runtime_base_url(provider: str | None, base_url: str | None) -> str:
     if not candidate:
         candidate = default_local_openai_base_url()
 
-    return _maybe_remap_local_openai_loopback(candidate)
+    candidate = _maybe_remap_local_openai_loopback(candidate)
+    parsed = urlsplit(candidate)
+    if parsed.scheme in {"http", "https"} and parsed.netloc and not parsed.path.strip("/"):
+        candidate = urlunsplit(parsed._replace(path="/v1"))
+    return candidate
 
 
 def resolve_runtime_service_url(base_url: str | None, *, docker_base_url: str | None = None) -> str:
@@ -56,4 +60,19 @@ def _maybe_remap_local_openai_loopback(base_url: str) -> str:
         return base_url
 
     docker_base_url = str(settings.local_openai_docker_base_url or "").strip().rstrip("/")
-    return docker_base_url or base_url
+    if not docker_base_url:
+        return base_url
+    original = urlsplit(base_url)
+    configured_local = urlsplit(str(settings.local_openai_base_url or ""))
+    # The configured default may intentionally use a different container port/path.
+    if original.port == configured_local.port and original.path.rstrip("/") == configured_local.path.rstrip("/"):
+        return docker_base_url
+    docker = urlsplit(docker_base_url)
+    docker_host = docker.hostname
+    if not docker_host:
+        return base_url
+    if ":" in docker_host:
+        docker_host = f"[{docker_host}]"
+    netloc = f"{docker_host}:{original.port}" if original.port else docker_host
+    # Explicit alternative servers (e.g. vLLM on 8001) keep their own port/path.
+    return urlunsplit(original._replace(netloc=netloc))

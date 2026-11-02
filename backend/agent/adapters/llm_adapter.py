@@ -7,6 +7,9 @@ from typing import Any, Callable
 import httpx
 
 from agent.adapters.base import BaseAgentAdapter
+from agent.llm.base_url_resolver import resolve_runtime_base_url
+from agent.llm.runtime_auth import runtime_headers
+from agent.llm.runtime_options import apply_runtime_options
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -133,33 +136,34 @@ class LLMAgentAdapter(BaseAgentAdapter):
         runtime_model: dict[str, Any] | None = None,
     ) -> str:
         if runtime_model:
-            api_key = str(runtime_model.get("api_key") or settings.deepseek_api_key)
-            base_url = str(runtime_model.get("base_url") or settings.deepseek_base_url).rstrip("/")
-            model = str(runtime_model.get("model_id") or settings.deepseek_model_id)
+            provider = str(runtime_model.get("provider") or "deepseek").strip().lower()
+            api_key = runtime_model.get("api_key")
+            base_url = resolve_runtime_base_url(provider, runtime_model.get("base_url"))
+            model = str(runtime_model.get("model_id") or "").strip()
         else:
+            provider = "deepseek"
             api_key = settings.deepseek_api_key
             base_url = settings.deepseek_base_url.rstrip("/")
             model = settings.deepseek_model_id
 
-        if not api_key:
-            raise RuntimeError("No meeting runtime model API key is configured")
+        if not base_url or not model:
+            raise RuntimeError("Meeting runtime endpoint or model identifier is not configured")
+        headers = runtime_headers(provider, api_key)
 
         full_content = ""
-        async with httpx.AsyncClient(timeout=600, trust_env=False) as client:
+        timeout = settings.local_model_timeout_sec if provider == "local_openai" else 600
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
             async with client.stream(
                 "POST",
                 f"{base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
+                headers=headers,
+                json=apply_runtime_options({
                     "model": model,
                     "messages": messages,
                     "temperature": 0.7,
                     "max_tokens": 2000,
                     "stream": True,
-                },
+                }, provider),
             ) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():

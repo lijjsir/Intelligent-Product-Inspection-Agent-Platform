@@ -6,6 +6,8 @@ from typing import Any, Iterable
 import httpx
 
 from agent.llm.base_url_resolver import resolve_runtime_base_url
+from agent.llm.runtime_probe import ModelRuntimeProbe
+from agent.llm.runtime_auth import runtime_headers
 from app.core.config import settings
 
 
@@ -33,7 +35,10 @@ class ModelHealthChecker:
         if item.get("api_key"):
             headers["Authorization"] = f"Bearer {item['api_key']}"
 
-        timeout = float(settings.model_health_timeout_sec)
+        is_local = str(item.get("provider") or "").strip().lower() == "local_openai"
+        if is_local:
+            headers = runtime_headers("local_openai", item.get("api_key"))
+        timeout = float(settings.local_model_timeout_sec if is_local else settings.model_health_timeout_sec)
         async with httpx.AsyncClient(base_url=endpoint, timeout=timeout, trust_env=False) as client:
             try:
                 response = await client.get("/models", headers=headers)
@@ -51,6 +56,13 @@ class ModelHealthChecker:
                 return "unhealthy", self._trim_message(f"GET /models returned invalid payload: {exc}")
 
             if model_key in model_ids:
+                if is_local:
+                    probe = ModelRuntimeProbe()
+                    result = await probe.check_capability(
+                        client, item, probe.basic_capability(item), headers=headers,
+                    )
+                    status = result["status"] if result["status"] != "unsupported" else "unhealthy"
+                    return status, result["message"]
                 return "healthy", "GET /models contains model_key"
             fallback_status, fallback_message = await self._probe_runtime_model(
                 client=client,
@@ -60,7 +72,7 @@ class ModelHealthChecker:
             )
             if fallback_status is not None:
                 return fallback_status, fallback_message
-            return "unhealthy", self._missing_model_key_message(model_key, set())
+            return "unhealthy", self._missing_model_key_message(model_key, model_ids)
 
     async def _probe_runtime_model(
         self,

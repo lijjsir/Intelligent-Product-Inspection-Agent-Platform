@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.common import PageParams
+from app.core.model_types import normalize_model_type
 
 
 class FeedbackCategory(str, Enum):
@@ -101,7 +102,7 @@ class ModelConfigCreate(BaseModel):
     @field_validator("model_type")
     @classmethod
     def _validate_model_type(cls, value: str) -> str:
-        text = str(value or "").strip().lower()
+        text = normalize_model_type(value)
         if text not in ALLOWED_MODEL_TYPES:
             raise ValueError("unsupported model_type")
         return text
@@ -153,7 +154,7 @@ class ModelConfigUpdate(BaseModel):
     def _validate_optional_model_type(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
-        text = str(value).strip().lower()
+        text = normalize_model_type(value)
         if text not in ALLOWED_MODEL_TYPES:
             raise ValueError("unsupported model_type")
         return text
@@ -201,6 +202,24 @@ class ModelConfigResponse(BaseModel):
 class HealthCheckResult(BaseModel):
     health_status: str
     health_message: Optional[str] = None
+
+
+class ModelVerificationRequest(BaseModel):
+    capabilities: list[Literal["text", "json", "vision", "tools", "embedding"]] = Field(min_length=1, max_length=5)
+
+
+class ModelCapabilityResult(BaseModel):
+    capability: str
+    status: Literal["healthy", "unhealthy", "degraded", "unsupported"]
+    message: str
+    latency_ms: int
+    vector_dimension: Optional[int] = None
+
+
+class ModelVerificationResult(BaseModel):
+    model_config_id: str
+    model_key: str
+    results: list[ModelCapabilityResult]
 
 
 class HealthCheckAllResult(BaseModel):

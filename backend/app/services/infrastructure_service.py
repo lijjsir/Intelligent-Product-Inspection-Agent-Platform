@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.llm.base_url_resolver import resolve_runtime_service_url
 from app.core.config import settings
+from app.core.model_types import normalize_model_type
 from app.repositories.model_config_repo import ModelConfigRepository
 from app.schemas.infrastructure import InfrastructureComponentStatus, InfrastructureStatusResponse
 from app.services.object_storage.factory import build_object_storage
@@ -106,7 +107,7 @@ class InfrastructureService:
             relevant = [
                 item
                 for item in models
-                if str(getattr(item, "model_type", "") or "").strip().lower() in model_types
+                if normalize_model_type(getattr(item, "model_type", "") or "") in model_types
             ]
             if not relevant:
                 if fallback_configured:

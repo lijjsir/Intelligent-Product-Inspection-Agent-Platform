@@ -7,6 +7,7 @@ from typing import Any
 from cryptography.fernet import Fernet
 
 from app.core.config import settings
+from app.core.model_types import normalize_model_type
 from app.core.exceptions import NotFoundError
 from app.core.ids import uuid7
 from app.repositories.model_config_repo import ModelConfigRepository
@@ -65,7 +66,7 @@ class ModelConfigService(TenantAwareService):
         _model_config_cache.delete_prefix(f"models:{self._org_id}:")
 
     async def list_runtime_models(self, model_type: str | None = None) -> list[dict[str, Any]]:
-        normalized_type = str(model_type or "all").strip().lower() or "all"
+        normalized_type = normalize_model_type(model_type or "all") or "all"
         cache_key = f"models:{self._org_id}:{normalized_type}"
         cached = _model_config_cache.get(cache_key)
         if cached is not None:
@@ -74,7 +75,7 @@ class ModelConfigService(TenantAwareService):
         result = [
             self.to_runtime_payload(item)
             for item in models
-            if normalized_type == "all" or str(getattr(item, "model_type", "") or "").lower() == normalized_type
+            if normalized_type == "all" or normalize_model_type(getattr(item, "model_type", "") or "") == normalized_type
         ]
         _model_config_cache.set(cache_key, result, ttl_seconds=30)
         return result
@@ -101,7 +102,7 @@ class ModelConfigService(TenantAwareService):
             "source_type": getattr(model, "source_type", "external"),
             "source_uri": getattr(model, "source_uri", None),
             "endpoint": getattr(model, "endpoint", None),
-            "model_type": getattr(model, "model_type", None),
+            "model_type": normalize_model_type(getattr(model, "model_type", "") or "chat"),
             "fine_tune_command_template": getattr(model, "fine_tune_command_template", None),
             "offline_eval_command_template": getattr(model, "offline_eval_command_template", None),
             "deployment_command_template": getattr(model, "deployment_command_template", None),

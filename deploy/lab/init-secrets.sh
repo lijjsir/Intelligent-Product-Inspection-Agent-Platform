@@ -23,6 +23,10 @@ openssl pkey -in deploy/lab/secrets/jwt_private.pem -pubout -out deploy/lab/secr
     printf 'PIAP_VOLCENGINE_API_KEY=\n'
     printf 'PIAP_VOLCENGINE_MODEL_ID=\n'
     printf 'PIAP_VOLCENGINE_EMBED_MODEL=\n'
+    printf 'PIAP_LOCAL_OPENAI_BASE_URL=http://127.0.0.1:11434/v1\n'
+    printf 'PIAP_LOCAL_OPENAI_DOCKER_BASE_URL=http://host.docker.internal:11434/v1\n'
+    printf 'PIAP_LOCAL_OPENAI_API_KEY=\n'
+    printf 'PIAP_LOCAL_MODEL_TIMEOUT_SEC=120\n'
 } > .env.lab
 
 echo "Created .env.lab and a private JWT key pair. Keep these files on the server." >&2
