@@ -39,8 +39,9 @@ class ModelConfigService(TenantAwareService):
         body = dict(payload)
         body["id"] = str(uuid7())
         body["org_id"] = body.get("org_id") or self._org_id
-        if body.get("api_key"):
-            body["api_key_enc"] = _fernet().encrypt(str(body.pop("api_key")).encode("utf-8")).decode("utf-8")
+        api_key = body.pop("api_key", None)
+        if api_key:
+            body["api_key_enc"] = _fernet().encrypt(str(api_key).encode("utf-8")).decode("utf-8")
         body.setdefault("health_status", "unknown")
         body.setdefault("health_message", None)
         created = await self._repo.create(body)

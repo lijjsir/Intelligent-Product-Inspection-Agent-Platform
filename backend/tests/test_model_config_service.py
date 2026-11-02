@@ -5,12 +5,35 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.model_config_service import ModelConfigService, _fernet
+from app.models.model_config import ModelConfig
+from app.schemas.governance import ModelConfigCreate
 from infra.cache.memory_cache import _model_config_cache
 
 
 class FakeSession:
     async def commit(self):
         return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", [None, ""])
+async def test_create_keyless_local_config_constructs_real_orm_model(monkeypatch, key):
+    class Repo:
+        def __init__(self, session):
+            pass
+
+        async def create(self, payload):
+            # Keep the actual SQLAlchemy constructor: it rejects unknown
+            # api_key=None fields that permissive repository mocks miss.
+            return ModelConfig(**payload)
+
+    monkeypatch.setattr("app.services.model_config_service.ModelConfigRepository", Repo)
+    payload = ModelConfigCreate(provider="local_openai", model_key="qwen3.5:9b-q8_0",
+        display_name="Local Qwen", source_uri="ollama:qwen3.5:9b-q8_0",
+        endpoint="http://model-service:11434/v1", api_key=key).model_dump()
+    created = await ModelConfigService(FakeSession(), "org-1").create_config(payload)
+    assert created.provider == "local_openai"
+    assert created.api_key_enc is None
 
 
 def model(model_key: str, model_type: str = "chat"):
