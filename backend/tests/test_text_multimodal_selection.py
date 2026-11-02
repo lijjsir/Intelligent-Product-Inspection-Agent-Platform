@@ -27,6 +27,18 @@ def test_embeddings_inactive_and_unconfigured_models_remain_excluded():
     assert ModelSelector().select([model("chat")],model_types={"vision"}) is None
 
 
+def test_primary_multimodal_model_serves_text_before_lower_priority_cloud_backup():
+    primary=model("multimodal",priority=1)
+    backup=model("chat",id="cloud-backup",priority=100)
+    assert ModelSelector().select([backup,primary],model_types={"chat"})["id"]=="vlm-runtime"
+
+
+def test_exact_type_still_breaks_equal_priority_ties():
+    primary=model("multimodal",priority=10)
+    text=model("chat",id="text-runtime",priority=10)
+    assert ModelSelector().select([primary,text],model_types={"chat"})["id"]=="text-runtime"
+
+
 @pytest.mark.asyncio
 async def test_supervision_text_path_resolves_multimodal_and_propagates_real_call_failure(monkeypatch):
     from app.services.model_config_service import ModelConfigService

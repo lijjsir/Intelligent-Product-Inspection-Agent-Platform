@@ -24,8 +24,9 @@ class ModelSelector:
             and self._is_configured_runtime(item)
             and self.runtime_id(item) not in excluded_runtime_ids
         ]
-        # Explicitly requested types precede compatible multimodal fallbacks.
-        type_order = {t: i for i, t in enumerate(model_types) if t} if model_types else {}
+        # Honor configured priority across compatible models. Exact types only
+        # break ties; a primary VLM must also serve text ahead of a backup LLM.
+        type_order = {t: i for i, t in enumerate(sorted(model_types)) if t} if model_types else {}
         return sorted(active, key=lambda item: self._sort_key(item, type_order=type_order))
 
     def select(
@@ -57,8 +58,8 @@ class ModelSelector:
         order = type_order or {}
         return (
             cls._health_rank(item.get("health_status")),
+            int(item["priority"]) if item.get("priority") is not None else 9999,
             order.get(str(item.get("model_type") or "chat").lower(), 99),
-            int(item.get("priority") or 9999),
             str(item.get("display_name") or item.get("model_key") or ""),
         )
 
