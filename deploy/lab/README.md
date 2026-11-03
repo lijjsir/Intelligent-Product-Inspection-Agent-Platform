@@ -169,8 +169,16 @@ and `-f deploy/lab/compose.model-api.yml`. The internal Ollama service and
 platform containers remain unchanged.
 
 Clients use `http://<this-server-private-ip>:11434/v1`, model
-`qwen3.5:9b-q8_0`, and `/chat/completions`. The gateway forwards only model
-listing, chat completions and embeddings; native Ollama management routes are
+`qwen3.5:9b-q8_0`, and `/chat/completions` or `/responses`. The gateway forwards only model
+listing, chat completions, stateless Responses and embeddings; native Ollama management routes are
 not exposed. No additional API key is configured; SDKs requiring one may use
-a local placeholder. For Qwen direct responses, set `reasoning_effort: none`.
+a local placeholder. For Chat Completions, set `reasoning_effort: "none"`;
+for Responses, set `reasoning: {"effort": "none"}` and `store: false`.
+Ollama 0.40.13 was verified with native Responses text, inline image input,
+streaming output and function calls. Responses clients can connect directly
+without a Responses-to-Chat bridge. This is a subset of the OpenAI protocol:
+do not assume support for server-side conversation storage, remote compaction,
+or all Codex tool types. Keep the client context budget within the configured
+16,384 tokens and use a modest output budget (for example 2,048 tokens);
+large coding-agent instructions and tool catalogs can exceed that budget.
 The gateway is for the trusted LAN and is not intended for public forwarding.
