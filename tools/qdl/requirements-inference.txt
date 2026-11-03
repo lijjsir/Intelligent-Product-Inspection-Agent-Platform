@@ -1,0 +1,9 @@
+# Ollama backend only needs Pillow; HTTP client and QDL matcher use Python stdlib.
+Pillow>=10.0.0
+
+# Install these only for --backend transformers. Install PyTorch separately
+# to match the server's CUDA runtime: https://pytorch.org/get-started/locally/
+# transformers>=4.57.1
+# accelerate>=1.2.0
+# peft>=0.14.0
+# qwen-vl-utils>=0.0.8

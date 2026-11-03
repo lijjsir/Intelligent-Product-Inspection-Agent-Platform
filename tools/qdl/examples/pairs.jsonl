@@ -1,0 +1,2 @@
+{"id": "matching-example", "split": "test", "category": "bottle", "text_structured": {"has_defect": "Yes", "defect_category": "scratch", "evidence_summary": "visible scratch"}, "image_structured": {"has_defect": "Yes", "defect_category": "scratch", "evidence_summary": "visible scratch"}}
+{"id": "conflict-example", "split": "test", "category": "bottle", "text_structured": {"has_defect": "Yes", "defect_category": "scratch"}, "image_structured": {"has_defect": "No", "defect_category": "none"}}

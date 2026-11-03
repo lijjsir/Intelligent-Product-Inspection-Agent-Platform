@@ -23,6 +23,7 @@ SOURCE_PREFIXES = (
     "backend/requirements/",
     "backend/worker/",
     "frontend/src/",
+    "tools/qdl/",
 )
 SOURCE_FILES = {
     ".dockerignore",
@@ -46,6 +47,7 @@ SOURCE_FILES = {
     "frontend/public/piap-icon.svg",
     "backend/scripts/init_memory_qdrant.py",
     "backend/scripts/verify_local_quality_release.py",
+    "scripts/detect_defects.py",
     "compose.lab.yml",
     "deploy/lab/Dockerfile.frontend",
     "deploy/lab/Dockerfile.backend-hotfix",
@@ -67,8 +69,11 @@ DENIED_PARTS = {
     "runtime",
     "runtime_uploads",
     "node_modules",
+    "results",
+    ".venv",
+    ".pytest_cache",
 }
-DENIED_NAMES = {".env", ".env.lab", "jwt_private.pem", "jwt_public.pem"}
+DENIED_NAMES = {".env", ".env.lab", "jwt_private.pem", "jwt_public.pem", "config.local.json"}
 
 
 def selected_files() -> list[str]:

@@ -22,6 +22,13 @@ PIAP 是一个面向工业质检场景的全栈 AI Agent 平台。当前项目�
 - 任务字段已经统一为 `spec_code`，数据库迁移需要执行到 `0010_task_spec_id_to_spec_code`
 - 前端任务创建页当前使用“检测标准”下拉选择，不再手填旧的 `spec_id`
 
+## 独立缺陷检测脚本
+
+在项目根目录执行 `python scripts/detect_defects.py --image /path/to/image.png`，
+即可调用已部署的多模态模型检测图片，默认输出 JSON 到 `tools/qdl/results/`。
+支持单图、图片目录、独立 QDL 图文匹配及标注评测，无需启动平台服务。
+首次使用请按 [独立检测说明](tools/qdl/README.md) 配置模型接口。
+
 ## 技术栈
 
 ### 后端

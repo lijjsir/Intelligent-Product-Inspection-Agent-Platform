@@ -20,7 +20,9 @@ def test_archive_excludes_secrets_and_matches_its_manifest(tmp_path,monkeypatch)
     source=tmp_path/'source';source.mkdir()
     for path in bundle.SOURCE_FILES:
         file=source/path;file.parent.mkdir(exist_ok=True,parents=True);file.write_text('Source fixture',encoding='utf-8')
-    for path in ['backend/app/real_source.py','backend/app/.env.local','backend/app/private.pem','backend/app/runtime/data.json','backend/app/tests/mock.json','frontend/src/local.spec.ts']:
+    for path in ['backend/app/real_source.py','backend/app/.env.local','backend/app/private.pem','backend/app/runtime/data.json','backend/app/tests/mock.json','frontend/src/local.spec.ts',
+                 'tools/qdl/predict.py','tools/qdl/qdl_core/qdl_module.py','tools/qdl/config.local.json',
+                 'tools/qdl/results/private.jsonl','tools/qdl/.venv/data.py','tools/qdl/test_private.py']:
         file=source/path;file.parent.mkdir(exist_ok=True,parents=True);file.write_text('Fixture',encoding='utf-8')
     monkeypatch.setattr(bundle,'ROOT',source)
     output=tmp_path/'source.tar.gz';monkeypatch.setattr(sys,'argv',['make_bundle.py',str(output)])
@@ -32,4 +34,7 @@ def test_archive_excludes_secrets_and_matches_its_manifest(tmp_path,monkeypatch)
         assert 'backend/app/.env.local' not in names and 'backend/app/private.pem' not in names
         assert 'backend/app/runtime/data.json' not in names and 'backend/app/tests/mock.json' not in names
         assert 'frontend/src/local.spec.ts' not in names
+        assert {'scripts/detect_defects.py','tools/qdl/predict.py','tools/qdl/qdl_core/qdl_module.py'} <= names
+        assert not any(name in names for name in ['tools/qdl/config.local.json','tools/qdl/results/private.jsonl',
+                                                  'tools/qdl/.venv/data.py','tools/qdl/test_private.py'])
         for name in names:assert manifest['files'][name]==hashlib.sha256(archive.extractfile(name).read()).hexdigest()
