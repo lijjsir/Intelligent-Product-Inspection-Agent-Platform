@@ -1,0 +1,4 @@
+ARG PIAP_WEB_BASE_IMAGE
+FROM ${PIAP_WEB_BASE_IMAGE}
+COPY deploy/lab/nginx.model-api.conf /etc/nginx/conf.d/default.conf
+EXPOSE 11434

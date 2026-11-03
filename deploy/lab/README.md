@@ -157,3 +157,20 @@ templates; installing an inference model alone does not configure training.
 
 Keep machine-specific addresses, account details and private backup locations
 in an internal operations record rather than publishing them with source code.
+
+### Optional direct LAN API
+
+Use the separate `compose.model-api.yml` gateway for applications on other
+trusted LAN computers. Build `Dockerfile.model-api` from an existing local
+PIAP web image using `--build-arg PIAP_WEB_BASE_IMAGE=<existing-web-image>`;
+this requires no new runtime or GPU packages. Set `PIAP_MODEL_LAN_ADDRESS` to
+the server's private LAN IP and start the gateway with Compose's `--env-file`
+and `-f deploy/lab/compose.model-api.yml`. The internal Ollama service and
+platform containers remain unchanged.
+
+Clients use `http://<this-server-private-ip>:11434/v1`, model
+`qwen3.5:9b-q8_0`, and `/chat/completions`. The gateway forwards only model
+listing, chat completions and embeddings; native Ollama management routes are
+not exposed. No additional API key is configured; SDKs requiring one may use
+a local placeholder. For Qwen direct responses, set `reasoning_effort: none`.
+The gateway is for the trusted LAN and is not intended for public forwarding.

@@ -53,6 +53,10 @@ SOURCE_FILES = {
     "deploy/lab/init-secrets.sh",
     "deploy/lab/install-docker-ubuntu.sh",
     "deploy/lab/install-ollama-user.py",
+    "deploy/lab/compose.model-api.yml",
+    "deploy/lab/Dockerfile.model-api",
+    "deploy/lab/Dockerfile.model-api.dockerignore",
+    "deploy/lab/nginx.model-api.conf",
     "deploy/lab/README.md",
 }
 DENIED_PARTS = {

@@ -1,0 +1,4 @@
+**
+!deploy/
+!deploy/lab/
+!deploy/lab/nginx.model-api.conf
