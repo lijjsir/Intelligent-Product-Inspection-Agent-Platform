@@ -201,7 +201,6 @@ async function submitReview() {
         &larr; 返回
       </el-button>
       <div v-if="currentResult" class="title-area">
-        <el-alert v-if="currentResult.reasoning_chain?.assessment_scope==='visible_image_assistance'" title="本次是图片可观察内容的辅助分析；图片建议或观察复核不能替代标准项目执行与产品整体判定。" type="info" :closable="false"/>
         <h2 class="text-2xl font-bold text-zinc-900">{{ hasRole('user') ? '检测结果' : hasRole('expert') ? '检测结果与专家复核' : '分析结果大盘' }}</h2>
         <el-tag :type="getVerdictType(currentResult.verdict)" size="large" class="ml-4">
           判定结论：{{ verdictLabels[currentResult.verdict] || "暂未判定" }}
@@ -216,7 +215,11 @@ async function submitReview() {
       </div>
     </div>
 
-    <UnifiedTaskResultPanel v-if="!loading&&summaryAvailable" :task-id="currentTaskId" :initial-run-id="String(route.query.run_id||'')"/>
+    <el-card v-if="currentResult" shadow="never" class="result-overview" data-testid="result-overview">
+      <h3>{{ defects.length ? `发现 ${defects.length} 处可定位缺陷` : '图像检测结果' }}</h3>
+      <p>{{ currentResult.reasoning_chain?.visual_inspection_result?.summary || '请结合下方原图、缺陷说明与检测报告查看本次结果。' }}</p>
+      <small v-if="currentResult.reasoning_chain?.assessment_scope==='visible_image_assistance'">本次结论仅覆盖图片可见外观，不表示产品整体符合全部检测标准。</small>
+    </el-card>
     <div v-if="currentResult" class="content">
       <KnowledgeSubmitDialog v-model="knowledgeSubmitOpen" source-kind="task_result" :source-id="currentResult.id"/>
       <div class="flex gap-5">
@@ -422,6 +425,12 @@ async function submitReview() {
     <div v-else-if="!loading&&!summaryAvailable" class="empty-state">
       <el-empty description="无法获取该任务的结果报告" />
     </div>
+    <UnifiedTaskResultPanel v-if="!loading && summaryAvailable && !currentResult" :task-id="currentTaskId" :initial-run-id="String(route.query.run_id||'')" />
+    <el-collapse v-if="!loading && summaryAvailable && currentResult">
+      <el-collapse-item title="标准执行、历史版本与风险研判" name="versions">
+        <UnifiedTaskResultPanel :task-id="currentTaskId" :initial-run-id="String(route.query.run_id||'')" />
+      </el-collapse-item>
+    </el-collapse>
     <el-drawer v-model="reportDrawerOpen" title="检测报告" size="min(100vw, 760px)">
       <UserTaskReportPanel v-if="reportDrawerOpen && summaryAvailable" :key="currentTaskId" :task-id="currentTaskId" embedded />
     </el-drawer>
@@ -434,7 +443,13 @@ async function submitReview() {
 .title-area {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
 }
+.title-area h2 { flex: 1 1 300px; margin: 0; }
+.result-overview h3 { margin: 0 0 12px; font-size: 24px; }
+.result-overview p { line-height: 1.7; }
+.result-overview small { color: #64748b; }
 
 
 .ml-4 {

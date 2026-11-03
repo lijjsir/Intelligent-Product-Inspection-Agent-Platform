@@ -3,6 +3,9 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/components/business/supervision/MeasurementPanel.vue",()=>({default:{name:"MeasurementPanel",render(){return null;}}}));
 
+vi.mock("@/api/result.api", () => ({ resultApi: { getByTask: vi.fn(async () => ({ data: { data: { defects: [], reasoning_chain: {}, llm_model: "test" } } })) } }));
+vi.mock("@/components/business/InspectionExecutionPanel.vue", () => ({ default: { render() { return null; } } }));
+
 import { taskApi } from "@/api/task.api";
 import { ragSpaceApi } from "@/api/rag-space.api";
 import { ROLE_ALGORITHM_ENGINEER, ROLE_EXPERT } from "@/constants/roles";
@@ -41,6 +44,7 @@ vi.mock("@/api/task.api", () => ({
     stream: vi.fn(),
     ingest: vi.fn(),
     run: vi.fn(),
+    retry: vi.fn(),
     delete: vi.fn(),
   },
 }));
@@ -120,6 +124,8 @@ function installElementPlusStubs(app: App<Element>) {
   app.component("el-button", ButtonStub);
   app.component("el-dialog", DialogStub);
   for (const name of [
+    "el-collapse",
+    "el-collapse-item",
     "el-alert",
     "el-card",
     "el-descriptions",
@@ -216,6 +222,17 @@ describe("TaskDetailView action buttons", () => {
   afterEach(() => {
     mounted?.unmount();
     mounted = null;
+  });
+
+  it("retries a failed image task with original input without opening evidence forms", async () => {
+    vi.mocked(taskApi.get).mockResolvedValue({ data: { data: { ...doneTask, status: 'failed', has_result: false, input_mode: 'image', execution: { error: '模型端点已关闭' } } } } as any);
+    vi.mocked(taskApi.retry).mockResolvedValue({ data: { data: { status: 'queued', mode: 'celery' } } } as any);
+    const { app, root } = await mountTaskDetail(ROLE_EXPERT);
+    mounted = app;
+    expect(root.querySelector('[data-testid="task-outcome"]')?.textContent).toContain('检测未完成');
+    await click(root, '重新检测');
+    expect(taskApi.retry).toHaveBeenCalledWith('task-1');
+    expect(taskApi.run).not.toHaveBeenCalled();
   });
 
   it("opens the analysis result and stability report routes for roles that can access them", async () => {

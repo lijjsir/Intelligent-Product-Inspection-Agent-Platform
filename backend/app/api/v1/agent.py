@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from app.api.v1.deps import get_current_user, get_db, apply_permission_identity, get_permission_identity
 from app.core.datetime import utcnow_iso
-from app.core.exceptions import ForbiddenError, NotFoundError
+from app.core.exceptions import ForbiddenError, NotFoundError, ValidationError
 from app.core.permissions import ROLE_USER, require_role
 from app.core.security import safe_decode_token
 from app.repositories.task_execution_event_repo import TaskExecutionEventRepository
@@ -90,6 +90,26 @@ async def run_task_pipeline(
 
     data = await launch_task_execution(task_id=task_id, org_id=current.org_id)
     return ResponseEnvelope(data=data)
+
+
+@router.post("/tasks/{task_id}/retry", response_model=ResponseEnvelope[dict])
+async def retry_task_pipeline(
+    task_id: str,
+    current: CurrentUser = Depends(get_current_user),
+    db=Depends(get_db),
+):
+    """Reuse original image input with freshly selected model configuration."""
+    require_role("task", current.role)
+    task = await TaskRepository(db).get_for_user(current.org_id, task_id,
+        owner_user_id=current.user_id if current.role == ROLE_USER else None)
+    if not task:
+        raise NotFoundError("task not found")
+    metadata = getattr(task, "meta_data", None) or {}
+    if metadata.get("supervision") or metadata.get("input_mode", "image") != "image":
+        raise ValidationError("实测或报告任务请从标准执行记录重新核验，不能作为图片任务重跑")
+    if getattr(task, "status", None) not in {"failed", "awaiting_review"}:
+        raise ValidationError("当前状态不能重新检测，请等待当前检测结束")
+    return ResponseEnvelope(data=await launch_task_execution(task_id=task_id, org_id=current.org_id))
 
 
 @router.get("/tasks/{task_id}/stream")

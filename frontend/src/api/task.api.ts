@@ -41,6 +41,10 @@ export const taskApi = {
     return http.post<TaskRunResponse>(`/v1/agent/tasks/${taskId}/run`);
   },
 
+  retry(taskId: string) {
+    return http.post<TaskRunResponse>(`/v1/agent/tasks/${taskId}/retry`);
+  },
+
   ingest(taskId: string, payload: TaskResultIngestRequest) {
     return http.post<TaskResultIngestResponse>(`/v1/tasks/${taskId}/ingest`, payload);
   },

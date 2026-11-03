@@ -621,6 +621,8 @@ async def _append_chat_failure_summary(
 
 async def run_inspection_pipeline(task_id: str, org_id: str) -> dict:
     """执行完整的 AI 质检流水线，包括状态流转、图推理、结果持久化和稳定性分析。"""
+    from app.services.model_config_service import ModelConfigService
+    ModelConfigService.invalidate_runtime_cache(org_id)
     async with get_session() as session:
         task_repo = TaskRepository(session)
         result_repo = ResultRepository(session)

@@ -14,7 +14,6 @@ const auth = useAuthStore();
 const canManage = computed(() => auth.effectivePermissions === null || auth.hasPermission("model_config"));
 const drawerOpen = ref(false);
 const editingId = ref("");
-const checkingId = ref("");
 const checkingAll = ref(false);
 const editingHasApiKey = ref(false);
 const isLocalProvider = computed(() => form.provider.trim().toLowerCase() === "local_openai");
@@ -28,6 +27,10 @@ const capabilityOptions: { value: ModelCapability; label: string }[] = [
   { value: "vision", label: "图片理解" }, { value: "tools", label: "工具调用" },
   { value: "embedding", label: "向量生成" },
 ];
+const availableCapabilities = computed(() => capabilityOptions.filter(item =>
+  verificationModel.value?.model_type === 'embedding' ? item.value === 'embedding'
+    : item.value !== 'embedding' && (verificationModel.value?.model_type === 'multimodal' || item.value !== 'vision'),
+));
 const providerOptions = [
   { value: "local_openai", label: "本地 OpenAI 兼容服务（Ollama / vLLM）" },
   { value: "volcengine", label: "火山引擎" }, { value: "deepseek", label: "DeepSeek" },
@@ -150,8 +153,9 @@ async function verifyModel() {
   try {
     const { data } = await modelConfigApi.verify(verificationModel.value.id, selectedCapabilities.value);
     verificationResults.value = data.data.results;
+    await store.fetchAll();
   } catch (e: any) {
-    ElMessage.error(e?.message || "接入验证失败");
+    ElMessage.error(e?.message || "能力验证失败");
   } finally {
     verifying.value = false;
   }
@@ -238,24 +242,6 @@ async function remove(id: string) {
   }
 }
 
-async function checkOne(id: string) {
-  checkingId.value = id;
-  try {
-    const result = await store.checkHealth(id);
-    if (result.health_status === "healthy") {
-      ElMessage.success(result.health_message || "健康检查通过");
-    } else if (result.health_status === "degraded") {
-      ElMessage.warning(result.health_message || "健康检查降级");
-    } else {
-      ElMessage.error(result.health_message || "健康检查失败");
-    }
-  } catch (e: any) {
-    ElMessage.error(e?.message || "健康检查失败");
-  } finally {
-    checkingId.value = "";
-  }
-}
-
 async function checkAll() {
   checkingAll.value = true;
   try {
@@ -290,7 +276,7 @@ onMounted(() => {
     <AlgoWorkspaceHero title="Base Model 注册" description="管理本地或外部模型接口、验证调用能力，并配置训练与部署模板。">
       <template #actions>
         <div class="flex gap-3">
-          <el-button v-if="canManage" @click="checkAll" :loading="checkingAll">全部检测</el-button>
+          <el-button v-if="canManage" @click="checkAll" :loading="checkingAll">全部验证</el-button>
           <el-button v-if="canManage" type="primary" @click="openCreate">新增 Base Model</el-button>
         </div>
       </template>
@@ -334,8 +320,7 @@ onMounted(() => {
         </el-table-column>
         <el-table-column label="操作" width="290" fixed="right">
           <template #default="{ row }">
-            <el-button v-if="canManage" link type="primary" @click="checkOne(row.id)" :loading="checkingId === row.id">检测</el-button>
-            <el-button v-if="canManage && row.provider.trim().toLowerCase() === 'local_openai'" link type="primary" @click="openVerification(row)" :disabled="verifying">接入验证</el-button>
+            <el-button v-if="canManage" link type="primary" @click="openVerification(row)" :disabled="verifying">能力验证</el-button>
             <el-button v-if="canManage" link type="primary" @click="openEdit(row)">编辑</el-button>
             <el-button v-if="canManage" link type="danger" @click="remove(row.id)">删除</el-button>
             <span v-if="!canManage" class="text-xs text-zinc-400">仅可查看</span>
@@ -409,11 +394,11 @@ onMounted(() => {
       </template>
     </el-drawer>
 
-    <el-dialog v-model="verificationOpen" title="本地模型接入验证" width="min(760px, 95vw)" :close-on-click-modal="!verifying" :close-on-press-escape="!verifying" :show-close="!verifying">
+    <el-dialog v-model="verificationOpen" title="模型能力验证" width="min(760px, 95vw)" :close-on-click-modal="!verifying" :close-on-press-escape="!verifying" :show-close="!verifying">
       <p class="mb-3">{{ verificationModel?.display_name }} · {{ verificationModel?.model_key }}</p>
       <p class="field-hint mb-3">发送少量测试文字和内置测试图片，检查接口及返回格式；不会执行业务工具或修改向量索引。验证结果不代表业务准确率。首次加载模型可能需要较长时间。</p>
       <el-checkbox-group v-model="selectedCapabilities" :disabled="verifying">
-        <el-checkbox v-for="item in capabilityOptions" :key="item.value" :value="item.value">{{ item.label }}</el-checkbox>
+        <el-checkbox v-for="item in availableCapabilities" :key="item.value" :value="item.value">{{ item.label }}</el-checkbox>
       </el-checkbox-group>
       <el-table :data="verificationResults" class="mt-4" v-loading="verifying" element-loading-text="正在调用模型，请等待验证完成">
         <el-table-column label="能力" width="100"><template #default="{ row }">{{ capabilityLabel(row.capability) }}</template></el-table-column>

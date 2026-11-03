@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from app.core.datetime import utcnow_iso
+from app.core.exceptions import ConflictError, NotFoundError
 from app.services.inspection_pipeline_service import run_inspection_pipeline
 from app.repositories.task_repo import TaskRepository
 from infra.database.session import get_session
@@ -43,11 +44,17 @@ async def launch_task_execution(task_id: str, org_id: str) -> dict[str, Any]:
 
     async with get_session() as session:
         repo = TaskRepository(session)
+        task = await repo.get(org_id, task_id, for_update=True)
+        if not task:
+            raise NotFoundError("task not found")
+        if task.status in {"queued", "running"}:
+            raise ConflictError("任务正在检测，请等待当前检测结束")
+        metadata = dict(task.meta_data or {})
+        previous = dict(metadata.get("execution") or {})
+        if previous.get("finished_at"):
+            metadata["execution_history"] = [*list(metadata.get("execution_history") or []), previous][-20:]
         await repo.update_status(org_id, task_id, "queued")
-        task = await repo.get(org_id, task_id)
-        metadata = dict(task.meta_data or {}) if task else {}
         metadata["execution"] = {
-            **dict(metadata.get("execution") or {}),
             "mode": mode,
             "job_id": None,
             "queued_at": utcnow_iso(),

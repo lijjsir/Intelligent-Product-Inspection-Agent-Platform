@@ -12,6 +12,7 @@ import httpx
 
 from agent.llm.base_url_resolver import resolve_runtime_base_url
 from agent.llm.runtime_auth import runtime_headers
+from agent.llm.runtime_failure import model_failure
 from agent.llm.runtime_options import apply_runtime_options
 from app.core.config import settings
 from app.core.model_types import normalize_model_type
@@ -34,14 +35,36 @@ class ModelRuntimeProbe:
 
     async def verify(self, item: dict[str, Any], capabilities: list[str]) -> list[dict[str, Any]]:
         endpoint = resolve_runtime_base_url(item.get("provider"), item.get("endpoint"))
-        headers = runtime_headers(item.get("provider"), item.get("api_key"))
+        try:
+            headers = runtime_headers(item.get("provider"), item.get("api_key"))
+        except RuntimeError:
+            return [{"capability": capability, "status": "unhealthy", "message": "模型密钥未配置，请编辑模型配置后重新验证", "latency_ms": 0}
+                    for capability in dict.fromkeys(capabilities)]
         async with httpx.AsyncClient(
             base_url=endpoint, timeout=float(settings.local_model_timeout_sec), trust_env=False,
         ) as client:
-            return [
-                await self.check_capability(client, item, capability, headers=headers)
-                for capability in dict.fromkeys(capabilities)
-            ]
+            results = []
+            for capability in dict.fromkeys(capabilities):
+                if capability == "embedding" and item.get("provider") != "local_openai":
+                    results.append(await self._provider_embedding(item))
+                else:
+                    results.append(await self.check_capability(client, item, capability, headers=headers))
+            return results
+
+    async def _provider_embedding(self, item):
+        from agent.llm.client import LLMClient
+        started = time.monotonic()
+        result = {"capability": "embedding", "status": "unhealthy"}
+        try:
+            vector = await LLMClient(api_key=item.get("api_key"), base_url=item.get("endpoint"),
+                                     provider=item.get("provider"), embed_model=item.get("model_key")).embed("PIAP connection test")
+            self._validate({"data": [{"embedding": vector}]}, "embedding")
+            result.update(status="healthy", message="向量接口调用通过；未修改已有索引", vector_dimension=len(vector))
+        except Exception as exc:
+            message, retryable = model_failure(exc)
+            result.update(status="degraded" if retryable else "unhealthy", message=message)
+        result["latency_ms"] = round((time.monotonic() - started) * 1000)
+        return result
 
     @staticmethod
     def basic_capability(item: dict[str, Any]) -> str:
@@ -62,7 +85,8 @@ class ModelRuntimeProbe:
                     result["status"] = "unsupported"
                 elif response.status_code in {408, 429} or response.status_code >= 500:
                     result["status"] = "degraded"
-                result["message"] = f"{path} HTTP {response.status_code}; check model and capability support"
+                message, _ = model_failure(httpx.HTTPStatusError("probe failed", request=response.request, response=response))
+                result["message"] = message
             else:
                 data = response.json()
                 detail = self._validate(data, capability)

@@ -3,6 +3,9 @@ import { computed, onUnmounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 
+import { resultApi } from "@/api/result.api";
+import { extractResultReport } from "@/views/result-detail-display";
+import type { InspectionResult } from "@/types/result.types";
 import { usePermission } from "@/composables/usePermission";
 import {
   ROLE_ADMIN,
@@ -33,6 +36,10 @@ const { hasRole, hasPermission } = usePermission();
 const loading = ref(true);
 const nativeExecution=ref<InstanceType<typeof InspectionExecutionPanel>|null>(null);
 const running = ref(false);
+const resultPreview = ref<InspectionResult | null>(null);
+const secondaryPanels = ref<string[]>([]);
+const latestFailure = computed(() => currentTask.value?.execution?.error || [...timeline.value].reverse().find(item => item.status === "failed")?.message || "模型或检测服务未完成调用，请调整后重新检测。");
+const previewReport = computed(() => extractResultReport(resultPreview.value));
 const deleting = ref(false);
 const deleteDialogVisible = ref(false);
 const ingestDialogVisible = ref(false);
@@ -74,6 +81,7 @@ const canOpenIngest = computed(() => currentTask.value?.status === "done" && cur
 const canRerunTask = computed(() => {
   const task = currentTask.value;
   if (!task) return false;
+  if ((task.input_mode && task.input_mode !== "image") || task.supervision) return false;
   if (task.status === "failed") return true;
   // Repair legacy task-management records that were incorrectly routed to the
   // supervision draft branch before the routing fix.
@@ -142,6 +150,8 @@ function sortTimeline() {
 }
 
 function pushEvent(event: TaskStreamEvent) {
+  const started = parseServerDateTime(String(currentTask.value?.execution?.queued_at || ""))?.getTime();
+  if (started && eventTime(event) < started) return;
   if (event.type === "ready" || event.message === "stream_connected") {
     return;
   }
@@ -171,7 +181,11 @@ function pushEvent(event: TaskStreamEvent) {
 async function startPipeline() {
   try {
     running.value = true;
-    const result = await taskStore.runTask(taskId.value);
+    const result = await taskStore.retryTask(taskId.value);
+    timeline.value = [];
+    seenEventIds.clear();
+    seenEventFingerprints.clear();
+    resultPreview.value = null;
     if (taskStore.current) {
       taskStore.current.status = result.status || "queued";
     }
@@ -292,11 +306,16 @@ async function loadTaskDetail(id: string) {
   seenEventFingerprints.clear();
   loading.value = true;
   try {
-    await taskStore.fetchTask(id);
+    const task = await taskStore.fetchTask(id);
+    resultPreview.value = null;
+    if (task.has_result && canViewInspectionResults.value) {
+      try { resultPreview.value = (await resultApi.getByTask(id)).data.data; } catch { /* Keep retry controls available. */ }
+    }
     const events = await taskStore.fetchTaskEvents(id);
     timeline.value = [];
     for (const event of events) {
-      if (rememberEvent(event)) {
+      const started = parseServerDateTime(String(currentTask.value?.execution?.queued_at || ""))?.getTime();
+      if ((!started || eventTime(event) >= started) && rememberEvent(event)) {
         timeline.value.push(event);
       }
     }
@@ -326,9 +345,9 @@ onUnmounted(() => {
     <div>
       <el-button @click="goBack" class="back-button">&larr; 返回列表</el-button>
       <div v-if="currentTask" class="title-area">
-        <h2 class="text-2xl font-bold text-zinc-900">任务：{{ currentTask.id }}</h2>
+        <h2 class="text-2xl font-bold text-zinc-900">检测任务</h2>
         <el-tag :type="getStatusType(currentTask.status)" size="large">
-          {{ hasRole(ROLE_USER) || riskVerificationId ? taskStatusLabel(currentTask.status) : currentTask.status.toUpperCase() }}
+          {{ taskStatusLabel(currentTask.status) }}
         </el-tag>
         <el-button
           v-if="canRerunTask"
@@ -336,7 +355,7 @@ onUnmounted(() => {
           :loading="running"
           @click="startPipeline"
         >
-          重新执行检测
+          重新检测
         </el-button>
         <el-button
           v-if="currentTask.has_result && canViewInspectionResults"
@@ -384,10 +403,21 @@ onUnmounted(() => {
     </div>
 
     <div v-if="currentTask" class="content">
-      <RiskTaskOriginPanel v-if="riskVerificationId&&hasRole(ROLE_EXPERT)&&hasPermission('quality_material_read_business')" :task-id="currentTask.id" :link-id="riskVerificationId" />
-      <InspectionCaseWorkflowPanel v-if="currentTask.has_case_workflow&&hasPermission('inspection_execution')&&hasPermission('result')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id"/>
-      <MeasurementPanel v-if="riskVerificationId&&hasPermission('inspection_execution')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id" preparation-only @ready="nativeExecution?.openCreate()" />
-      <InspectionExecutionPanel ref="nativeExecution" v-if="hasPermission('inspection_execution')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id"/>
+      <el-card shadow="never" class="task-outcome" data-testid="task-outcome">
+        <h3>{{ currentTask.status === 'failed' ? '检测未完成' : currentTask.has_result ? '检测结果' : running ? '正在检测' : '等待检测' }}</h3>
+        <template v-if="currentTask.status === 'failed'">
+          <el-alert :title="String(latestFailure)" type="error" show-icon :closable="false" />
+          <p>调整模型配置或服务后，点击“重新检测”即可沿用本次图片和检测标准，无需重新上传或补录执行记录。</p>
+        </template>
+        <template v-else-if="resultPreview">
+          <p>检出可定位缺陷 {{ resultPreview.defects?.length || 0 }} 处 · {{ resultPreview.llm_model }}</p>
+          <pre class="outcome-report">{{ previewReport }}</pre>
+        </template>
+        <p v-else>{{ running ? '正在分析原始输入，完成后可查看检测结果。' : currentTask.has_result ? '检测结果已生成，可打开结果详情查看原图与缺陷说明。' : '结果将显示在这里。' }}</p>
+      </el-card>
+      <el-collapse v-model="secondaryPanels">
+        <el-collapse-item title="任务基本信息" name="info">
+
       <el-card shadow="never">
         <template #header>基本信息</template>
         <el-descriptions :column="2">
@@ -415,6 +445,8 @@ onUnmounted(() => {
         />
       </el-card>
 
+        </el-collapse-item>
+        <el-collapse-item v-if="canOpenIngest && canIngestTaskResult" title="保存结果到知识库或数据集" name="ingest">
       <el-card v-if="canIngestTaskResult" shadow="never" class="ingest-card">
         <template #header>结果沉淀</template>
         <div class="ingest-panel">
@@ -430,6 +462,8 @@ onUnmounted(() => {
         </div>
       </el-card>
 
+        </el-collapse-item>
+        <el-collapse-item title="查看检测过程与诊断" name="progress">
       <el-card shadow="never" class="timeline-card">
         <template #header>{{ hasRole(ROLE_USER) ? '检测进度' : 'AI 检测 Agent 实时流' }}</template>
         <el-empty v-if="timeline.length === 0" description="等待执行阶段事件..." />
@@ -449,6 +483,15 @@ onUnmounted(() => {
           </el-timeline-item>
         </el-timeline>
       </el-card>
+        </el-collapse-item>
+        <el-collapse-item v-if="hasPermission('inspection_execution')" title="标准执行记录与复核（选用）" name="records">
+          <p>用于按标准条款记录实测、报告证据及复核，不是重新识图的前置步骤。仅检查图片时无需填写。</p>
+      <RiskTaskOriginPanel v-if="riskVerificationId&&hasRole(ROLE_EXPERT)&&hasPermission('quality_material_read_business')" :task-id="currentTask.id" :link-id="riskVerificationId" />
+      <InspectionCaseWorkflowPanel v-if="currentTask.has_case_workflow&&hasPermission('inspection_execution')&&hasPermission('result')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id"/>
+      <MeasurementPanel v-if="riskVerificationId&&hasPermission('inspection_execution')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id" preparation-only @ready="nativeExecution?.openCreate()" />
+      <InspectionExecutionPanel ref="nativeExecution" v-if="hasPermission('inspection_execution')&&hasRole([ROLE_USER,ROLE_EXPERT])" :task-id="currentTask.id"/>
+        </el-collapse-item>
+      </el-collapse>
     </div>
 
     <el-dialog
@@ -570,6 +613,10 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.task-outcome h3 { margin: 0 0 16px; font-size: 22px; }
+.task-outcome p { line-height: 1.7; color: #475569; }
+.outcome-report { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.7; max-height: 360px; overflow: auto; }
+
 .back-button {
   margin-bottom: 16px;
 }

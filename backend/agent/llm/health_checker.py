@@ -56,14 +56,15 @@ class ModelHealthChecker:
                 return "unhealthy", self._trim_message(f"GET /models returned invalid payload: {exc}")
 
             if model_key in model_ids:
-                if is_local:
+                if is_local or ModelRuntimeProbe.basic_capability(item) != "embedding":
                     probe = ModelRuntimeProbe()
                     result = await probe.check_capability(
                         client, item, probe.basic_capability(item), headers=headers,
                     )
                     status = result["status"] if result["status"] != "unsupported" else "unhealthy"
                     return status, result["message"]
-                return "healthy", "GET /models contains model_key"
+                result = await ModelRuntimeProbe()._provider_embedding(item)
+                return result["status"], result["message"]
             fallback_status, fallback_message = await self._probe_runtime_model(
                 client=client,
                 item=item,

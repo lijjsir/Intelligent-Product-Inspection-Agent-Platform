@@ -49,6 +49,10 @@ async def test_health_checker_disables_env_proxy(monkeypatch):
         async def get(self, path, headers=None):
             return FakeResponse()
 
+        async def post(self, path, json=None, headers=None):
+            import httpx
+            return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
     monkeypatch.setattr("agent.llm.health_checker.httpx.AsyncClient", FakeClient)
 
     checked = await ModelHealthChecker().check(

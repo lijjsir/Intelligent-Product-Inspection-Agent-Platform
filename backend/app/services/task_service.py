@@ -438,6 +438,7 @@ class TaskService:
             setattr(task, "org_slug", getattr(org, "slug", None))
             setattr(task, "source_kind", str(meta.get("source") or "unknown"))
             setattr(task, "source_graph", str(meta.get("source_graph") or meta.get("source_subgraph") or ""))
+            setattr(task, "input_mode", str(meta.get("input_mode") or "image"))
             execution = meta.get("execution") if isinstance(meta.get("execution"), dict) else None
             setattr(task, "execution", execution)
             await self._annotate_task_master_labels(task, meta)

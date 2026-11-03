@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import json as _json
 
+import httpx
+
+from agent.llm.runtime_failure import model_failure
+from agent.router.errors import AgentRuntimeError
+
 from agent.llm.gateway import LLMGateway
 from agent.router.contracts import CapabilityContext
 from agent.router.errors import make_agent_error
@@ -112,30 +117,55 @@ class VisionUnderstandingHandler:
                 detector_defects = extract_defects(detector_result, image_count=len(image_urls))
             except Exception as detector_exc:
                 detector_result = {"error": str(detector_exc)}
-            client = LLMClient(
-                api_key=runtime.get("api_key"),
-                base_url=runtime.get("base_url"),
-                model_id=runtime.get("model_id"),
-                provider=runtime.get("provider"),
-                trace_id=state.trace_id or state.workflow_run_id or state.request_id,
-                task_id=state.session_id,
-                org_id=request.org_id,
-            )
-            state.used_llm_calls += 1
-            response = await client.vision_chat(
-                build_vision_inspection_prompt(
-                    product_id=getattr(request, "product_id", None) or request.ext.get("product_id") or request.metadata.get("product_id"),
-                    spec_code=getattr(request, "spec_code", None) or request.ext.get("spec_code") or request.metadata.get("spec_code"),
-                ),
-                image_urls,
-            )
+            failures = []
+            excluded = set()
+            while runtime:
+                try:
+                    client = LLMClient(
+                        api_key=runtime.get("api_key"),
+                        base_url=runtime.get("base_url"),
+                        model_id=runtime.get("model_id"),
+                        provider=runtime.get("provider"),
+                        trace_id=state.trace_id or state.workflow_run_id or state.request_id,
+                        task_id=state.session_id,
+                        org_id=request.org_id,
+                    )
+                    state.used_llm_calls += 1
+                    response = await client.vision_chat(
+                        build_vision_inspection_prompt(
+                            product_id=getattr(request, "product_id", None) or request.ext.get("product_id") or request.metadata.get("product_id"),
+                            spec_code=getattr(request, "spec_code", None) or request.ext.get("spec_code") or request.metadata.get("spec_code"),
+                        ),
+                        image_urls,
+                    )
+                    break
+                except httpx.HTTPError as exc:
+                    message, retryable = model_failure(exc)
+                    failures.append({"model_id": runtime.get("model_id"), "message": message})
+                    if not retryable:
+                        raise make_agent_error("IMAGE_UNDERSTANDING_FAILED", message=message,
+                                               source="image.understanding", cause=exc) from exc
+                    from app.repositories.model_config_repo import ModelConfigRepository
+                    config = await ModelConfigService(db_session, request.org_id).get_config(runtime["model_config_id"])
+                    await ModelConfigRepository(db_session).update_health(config, health_status="unhealthy", health_message=message)
+                    await db_session.commit()
+                    ModelConfigService.invalidate_runtime_cache(request.org_id)
+                    excluded.add(str(runtime.get("runtime_key") or runtime.get("model_config_id")))
+                    runtime = await LLMGateway().select_runtime(models=models, model_types={"multimodal", "vision", "vlm"},
+                                                              excluded_runtime_ids=excluded, reserve=False)
+            if not runtime:
+                raise make_agent_error("IMAGE_MODEL_UNAVAILABLE", message=failures[-1]["message"] if failures else "没有可用的视觉模型。",
+                                       detail={"model_attempts": failures}, source="image.understanding")
             parsed = self._parse_vision_response(response)
             model_defects = extract_defects(parsed, image_count=len(image_urls))
             parsed["defects"] = detector_defects or model_defects
             if detector_result is not None:
                 parsed["detector_result"] = detector_result
             parsed["model_id"] = runtime.get("model_id")
+            parsed["model_failovers"] = failures
             return parsed
+        except AgentRuntimeError:
+            raise
         except Exception as exc:
             raise make_agent_error(
                 "IMAGE_UNDERSTANDING_FAILED",

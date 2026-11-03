@@ -60,6 +60,12 @@ export const useTaskStore = defineStore("task", () => {
     return data.data;
   }
 
+  async function retryTask(id: string) {
+    const { data } = await taskApi.retry(id);
+    await fetchTask(id);
+    return data.data;
+  }
+
   async function ingestTaskResult(id: string, payload: TaskResultIngestRequest) {
     const { data } = await taskApi.ingest(id, payload);
     return data.data;
@@ -113,6 +119,7 @@ export const useTaskStore = defineStore("task", () => {
     createTask,
     deleteTask,
     runTask,
+    retryTask,
     ingestTaskResult,
     fetchTaskEvents,
     subscribeTaskStream,

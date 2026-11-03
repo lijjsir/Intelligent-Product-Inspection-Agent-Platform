@@ -156,9 +156,17 @@ async def verify_local_model(
     require_role("model_config", current.role)
     model = await ModelConfigService(db, current.org_id).get_config(config_id)
     runtime = ModelConfigService.to_runtime_payload(model)
-    if str(runtime.get("provider") or "").strip().lower() != "local_openai":
-        raise ValidationError("接入验证适用于 local_openai 本地模型")
+    basic = ModelRuntimeProbe.basic_capability(runtime)
+    allowed = {"embedding"} if basic == "embedding" else {"text", "json", "tools"} | ({"vision"} if basic == "vision" else set())
+    if set(payload.capabilities) - allowed:
+        raise ValidationError("所选能力与模型类型不匹配")
     results = await ModelRuntimeProbe().verify(runtime, payload.capabilities)
+    primary = next((item for item in results if item["capability"] == basic), None)
+    if primary:
+        status = primary["status"] if primary["status"] != "unsupported" else "unhealthy"
+        await ModelConfigRepository(db).update_health(model, health_status=status, health_message=primary["message"])
+        await db.commit()
+        ModelConfigService.invalidate_runtime_cache(current.org_id)
     return ResponseEnvelope(data=ModelVerificationResult(
         model_config_id=config_id, model_key=model.model_key, results=results,
     ))

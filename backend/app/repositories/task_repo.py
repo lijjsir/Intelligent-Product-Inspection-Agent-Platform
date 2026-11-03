@@ -16,13 +16,15 @@ class TaskRepository:
         await self._session.refresh(task, attribute_names=["created_at", "updated_at"])
         return task
 
-    async def get(self, org_id: str | None, task_id: str) -> InspectionTask | None:
+    async def get(self, org_id: str | None, task_id: str, *, for_update: bool = False) -> InspectionTask | None:
         stmt = select(InspectionTask).where(
             InspectionTask.id == task_id,
             InspectionTask.deleted_at.is_(None),
         )
         if org_id:
             stmt = stmt.where(InspectionTask.org_id == org_id)
+        if for_update:
+            stmt = stmt.with_for_update()
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
 

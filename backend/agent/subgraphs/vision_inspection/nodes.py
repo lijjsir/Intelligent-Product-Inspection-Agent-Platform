@@ -91,6 +91,9 @@ async def legacy_vision_understanding_node(
             "legacy_result": result,
         }
     except Exception as exc:
+        from agent.router.errors import AgentRuntimeError
+        if isinstance(exc, AgentRuntimeError):
+            raise
         raise make_agent_error(
             "VISION_INSPECTION_FAILED",
             message=f"视觉模型执行失败：{exc}",
