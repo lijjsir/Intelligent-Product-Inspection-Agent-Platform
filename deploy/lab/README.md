@@ -139,3 +139,21 @@ docker compose --env-file .env.lab -f compose.lab.yml ps
 
 Never use `docker compose down -v` for a routine update; that removes the
 persistent database and object storage volumes.
+
+## Verified local model integration (2026-11-03)
+
+The live deployment was verified with Ollama 0.40.13 and
+`qwen3.5:9b-q8_0`, using two RTX 3060 12GB GPUs, a 16K context and one
+inference slot. Text generation, strict JSON, image input and OpenAI tool-call
+responses passed through the platform's authenticated verification API. The
+application client returned `703` for `37*19` and correctly distinguished two
+synthetic red/blue images. The algorithm engineer model configuration page
+was checked against the live API without page errors.
+
+These are protocol and basic functionality checks, not industrial accuracy or
+concurrency benchmarks. The existing embedding configuration remains separate.
+Actual fine-tuning still requires a training environment and real command
+templates; installing an inference model alone does not configure training.
+
+Keep machine-specific addresses, account details and private backup locations
+in an internal operations record rather than publishing them with source code.
